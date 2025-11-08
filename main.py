@@ -8,6 +8,7 @@ import json
 import asyncio
 import traceback
 from datetime import datetime
+import requests
 
 
 
@@ -575,6 +576,109 @@ TRẢ VỀ JSON (KHÔNG markdown):
 }}
 
 CHỈ JSON, KHÔNG TEXT KHÁC."""
+
+# Input model
+class ReorderRequest(BaseModel):
+    schedule: dict
+    prompt: str
+
+async def get_distance_matrix(locations: List[Dict[str, float]]) -> List[List[float]]:
+    """
+    Gọi VietMap Distance Matrix API để lấy thời gian di chuyển giữa các điểm (phút)
+    """
+    url = "https://maps.vietmap.vn/api/matrix/v1/driving"
+    headers = {"Content-Type": "application/json"}
+    body = {
+        "points": [{"lng": loc["lng"], "lat": loc["lat"]} for loc in locations],
+        "apikey": "4760087f980b480d9efaf4fb02c649ac9f69fc462c01d149"
+    }
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, headers=headers, json=body, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        durations = data.get("durations", [])
+        # Chuyển sang phút
+        durations_minutes = [[round(x / 60, 1) for x in row] for row in durations]
+        return durations_minutes
+
+@app.post("/reorder_schedule")
+async def reorder_schedule(req: ReorderRequest):
+    """
+    Reorder lại lịch trình theo prompt người dùng
+    và tự động tối ưu tuyến đường (route optimization).
+    """
+    try:
+        schedule_data = req.schedule
+        schedule_list = schedule_data.get("schedule", {}).get("schedule", [])
+        if not schedule_list:
+            raise HTTPException(status_code=400, detail="Không có địa điểm nào trong lịch trình.")
+
+        # Giả định bạn có lưu lat/lng trong raw_places_info
+        raw_places = schedule_data.get("raw_places_info", [])
+        locations = [{"lat": p.get("lat", 0), "lng": p.get("lng", 0)} for p in raw_places if p.get("lat") and p.get("lng")]
+
+        # Nếu có tọa độ thì tính distance matrix
+        distance_matrix = []
+        if len(locations) >= 2:
+            distance_matrix = await get_distance_matrix(locations)
+
+        # Tạo prompt cho Gemini
+        prompt_text = f"""
+Bạn là một trợ lý AI chuyên lập lịch du lịch thông minh.
+
+Dưới đây là lịch trình hiện tại của người dùng (dưới dạng JSON):
+{json.dumps(schedule_data, ensure_ascii=False, indent=2)}
+
+Nếu có ma trận thời gian di chuyển (đơn vị phút), hãy sử dụng để tối ưu:
+{json.dumps(distance_matrix, ensure_ascii=False)}
+
+Yêu cầu người dùng:
+{req.prompt}
+
+Nhiệm vụ của bạn:
+1. Sắp xếp lại thứ tự các địa điểm trong "schedule.schedule" sao cho tuyến đường ngắn nhất và hợp lý nhất.
+2. Đảm bảo phù hợp với ý muốn của người dùng.
+3. Cập nhật lại "order", "start_time", "end_time", "travel_time_to_next".
+4. Giữ nguyên các thông tin khác (notes, recommended_activities, ...).
+5. Trả về toàn bộ JSON đầy đủ, không cắt bớt, không thêm text ngoài JSON.
+"""
+
+        # Gọi Gemini
+        response = model.generate_content(prompt_text)
+        ai_text = response.text.strip()
+
+        # Xử lý nếu có markdown code block
+        if ai_text.startswith("```json"):
+            ai_text = ai_text[7:]
+        if ai_text.startswith("```"):
+            ai_text = ai_text[3:]
+        if ai_text.endswith("```"):
+            ai_text = ai_text[:-3]
+        ai_text = ai_text.strip()
+
+        # Parse JSON kết quả
+        try:
+            reordered = json.loads(ai_text)
+        except json.JSONDecodeError as e:
+            print("Gemini output parse error:", str(e))
+            print("Raw output:\n", ai_text)
+            raise HTTPException(status_code=500, detail="Gemini trả về định dạng không hợp lệ")
+
+        # Trả về kết quả cuối cùng
+        return {
+            "success": True,
+            "optimized": True,
+            "user_prompt": req.prompt,
+            "data": reordered
+        }
+
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=500, detail=f"Lỗi khi gọi API Vietmap: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 if __name__ == "__main__":
     import uvicorn
