@@ -1,9 +1,19 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
+import google.generativeai as genai
 import httpx
+import os
+from dotenv import load_dotenv
 
-app = FastAPI(title="Vietmap Places Search API")
+
+
+# Configure Gemini AI
+genai.configure(api_key="AIzaSyAbZpClyGJ7Qecl52BmyflzsoTc_U-6Sew")
+
+
+
+app = FastAPI(title="Vietmap Places Search API with AI")
 
 # Mapping categories -> keywords (đổi tên từ data -> CATEGORY_MAPPING)
 CATEGORY_MAPPING = {
@@ -48,7 +58,110 @@ class Place(BaseModel):
     name: str
     address: str
 
-# Endpoint
+class AIRecommendationRequest(BaseModel):
+    location: Location
+    user_query: str  # e.g., "Tìm quán cafe lãng mạn", "Nơi ăn tối cho gia đình"
+    max_results: Optional[int] = 5
+
+# Helper function for AI
+async def get_ai_recommendation(user_query: str, places_data: list) -> dict:
+    """
+    Sử dụng Gemini AI để phân tích query của user và recommend địa điểm phù hợp
+    """
+    if not model:
+        return {
+            "ai_enabled": False,
+            "message": "AI service not configured",
+            "recommendations": places_data[:5]
+        }
+    
+    try:
+        # Tạo prompt cho AI
+        places_summary = "\n".join([
+            f"{i+1}. {p.get('name', 'N/A')} - {p.get('address', 'N/A')} (Distance: {p.get('distance', 0)}m)"
+            for i, p in enumerate(places_data[:20])
+        ])
+        
+        prompt = f"""
+                Bạn là một trợ lý du lịch thông minh. Người dùng đang tìm kiếm: "{user_query}"
+
+                Dưới đây là danh sách các địa điểm gần đó:
+                {places_summary}
+
+                Hãy phân tích yêu cầu của người dùng và:
+                1. Chọn ra 3-5 địa điểm PHÙ HỢP NHẤT
+                2. Giải thích ngắn gọn tại sao những địa điểm này phù hợp
+                3. Sắp xếp theo mức độ phù hợp (không nhất thiết theo khoảng cách)
+
+                Trả về dưới dạng JSON với format:
+                {{
+                "analysis": "Phân tích ngắn gọn về yêu cầu",
+                "recommendations": [
+                    {{
+                    "rank": 1,
+                    "place_name": "Tên địa điểm",
+                    "reason": "Lý do recommend"
+                    }}
+                ]
+                }}
+                """
+        
+        response = model.generate_content(prompt)
+        ai_text = response.text
+        
+        # Parse JSON từ response
+        import json
+        # Tìm JSON trong response (có thể có markdown code block)
+        if "```json" in ai_text:
+            ai_text = ai_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in ai_text:
+            ai_text = ai_text.split("```")[1].split("```")[0].strip()
+        
+        ai_result = json.loads(ai_text)
+        
+        return {
+            "ai_enabled": True,
+            "analysis": ai_result.get("analysis", ""),
+            "recommendations": ai_result.get("recommendations", []),
+            "raw_places": places_data
+        }
+        
+    except Exception as e:
+        print(f"AI Error: {str(e)}")
+        return {
+            "ai_enabled": True,
+            "error": str(e),
+            "recommendations": places_data[:5]
+        }
+
+
+@app.get("/demo")
+async def demo(question: str):
+    try:
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        res = model.generate_content(f"""
+                                        Bạn là một công cụ tìm kiếm địa chỉ trên Google Maps.
+
+                                        Địa chỉ cần tìm: {question}
+
+                                        Yêu cầu:
+                                        1. Tìm địa chỉ này trên Google Maps
+                                        2. Chỉ trả về ĐÚNG 1 link Google Maps duy nhất
+                                        3. Không giải thích, không nói thêm gì
+                                        4. Format: https://www.google.com/maps/search/?api=1&query=...
+
+                                        CHỈ TRẢ VỀ LINK, KHÔNG CÓ TEXT NÀO KHÁC!
+                                        """)
+
+        
+        return {
+            "answer": res.text
+        }
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Endpoints
 @app.post("/search")
 async def search_places(request: SearchRequest):
     """
