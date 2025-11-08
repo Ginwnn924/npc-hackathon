@@ -7,6 +7,7 @@ import CurvedLoop from '../curve-loop/CurvedLoop';
 import AISection from '../ai/ai-section-1';
 import AISectionSelected from '../ai/ai-section-2';
 import Schedule from '../schedule/schedule';
+import Notification, { NotificationVariant } from '../notification/notification';
 
 interface FolderProps {
   color?: string;
@@ -117,6 +118,103 @@ const Folder: React.FC<FolderProps> = ({ color = '#161853', size = 1.5, items = 
     return () => window.removeEventListener('ai:created', handler as EventListener);
   }, []);
 
+  // simple toast stack so Folder can show notifications after modal closes
+  const [toasts, setToasts] = useState<Array<{ id: string; variant: NotificationVariant; message: React.ReactNode; duration?: number }>>([]);
+
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (document.getElementById('ai-toast-styles')) return;
+    const style = document.createElement('style');
+    style.id = 'ai-toast-styles';
+    style.innerHTML = `@keyframes ai-slide-down { from { transform: translateY(-10px); opacity: 0 } to { transform: translateY(0); opacity: 1 } } .ai-toast-anim { animation: ai-slide-down 320ms cubic-bezier(.2,.8,.2,1) both; will-change: transform, opacity; }`;
+    document.head.appendChild(style);
+  }, []);
+
+  const pushToast = (message: React.ReactNode, variant: NotificationVariant = 'info', duration = 4000, id?: string, autoHide: boolean = true) => {
+    try { console.log('[toast]', variant, message); } catch (e) {}
+    if (id) {
+      // if id exists, update existing toast
+      let found = false;
+      setToasts(prev => prev.map(t => {
+        if (t.id === id) {
+          found = true;
+          return { ...t, message, variant, duration };
+        }
+        return t;
+      }));
+      if (!found) {
+        setToasts(prev => [{ id, variant, message, duration }, ...prev]);
+      }
+      return id;
+    }
+    const nid = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    setToasts(prev => [{ id: nid, variant, message, duration }, ...prev]);
+    return nid;
+  };
+
+  const removeToast = (id: string) => setToasts(prev => prev.filter(t => t.id !== id));
+
+  // listen for modal-close request (close immediately when scheduling starts)
+  useEffect(() => {
+    const closeHandler = (e: any) => {
+      setModalPaper(null);
+      setOpen(false);
+      // show a brief info toast so user knows scheduling started
+      pushToast('Đang lập lịch...', 'info');
+      try { console.log('[event] ai:closeModal'); } catch (e) {}
+    };
+    window.addEventListener('ai:closeModal', closeHandler as EventListener);
+    return () => window.removeEventListener('ai:closeModal', closeHandler as EventListener);
+  }, []);
+
+  // listen for ai:toast events from AI modal so we can show/update toasts after modal closed
+  useEffect(() => {
+    const handler = (e: any) => {
+      const d = e?.detail ?? {};
+      // expected shape: { action?: 'push'|'update'|'remove', id?, variant?, message?, autoHide?, duration? }
+      const action = d.action ?? 'push';
+      const variant: NotificationVariant = d.variant ?? 'info';
+      const message = d.message ?? '';
+      const duration = typeof d.duration === 'number' ? d.duration : 4000;
+      const id = d.id as string | undefined;
+      try { console.log('[event] ai:toast', action, id ?? '', variant, message); } catch (err) {}
+      if (action === 'remove' && id) {
+        removeToast(id);
+        return;
+      }
+      if (action === 'update' && id) {
+        pushToast(message, variant, duration, id, d.autoHide !== false);
+        return;
+      }
+      // default push
+      pushToast(message, variant, duration, id, d.autoHide !== false);
+    };
+    window.addEventListener('ai:toast', handler as EventListener);
+    return () => window.removeEventListener('ai:toast', handler as EventListener);
+  }, []);
+
+  // listen for schedule completion — put the Schedule result into the center paper
+  useEffect(() => {
+    const completedHandler = (e: any) => {
+      const payload = e?.detail ?? null;
+      try {
+        if (payload) localStorage.setItem('ai:scheduleResult', JSON.stringify(payload));
+      } catch (err) {
+        // ignore storage errors
+      }
+      // show an empty center paper (paper 3) — schedule details are available in the Schedule modal/page
+      setResultPaper(<div />);
+      // ensure modal is closed for now
+      setModalPaper(null);
+      setOpen(false);
+      // notify user that scheduling finished
+      pushToast('Lập lịch hoàn tất', 'success');
+      try { console.log('[event] ai:scheduleCompleted', payload); } catch (e) {}
+    };
+    window.addEventListener('ai:scheduleCompleted', completedHandler as EventListener);
+    return () => window.removeEventListener('ai:scheduleCompleted', completedHandler as EventListener);
+  }, []);
+
   const folderStyle: React.CSSProperties = {
     '--folder-color': color,
     '--folder-back-color': folderBackColor,
@@ -127,11 +225,19 @@ const Folder: React.FC<FolderProps> = ({ color = '#161853', size = 1.5, items = 
 
   const folderClassName = `folder ${open ? 'open' : ''}`.trim();
   const scaleStyle = { transform: `scale(${size})` };
-  // render center paper (index 1) only when `resultPaper` is present (paper 2 succeeded)
-  const renderOrder = resultPaper ? [0, 2, 1] : [0, 2];
+  // always render three papers so we can show numeric badges 1 / 3 / 2
+  const renderOrder = [0, 2, 1];
 
   return (
     <div className="h-screen flex flex-col justify-center items-center gap-8 px-6 relative">
+      {/* Toast container so notifications are visible after modal is closed */}
+      <div aria-live="polite" role="status" className="fixed top-6 right-6 flex flex-col gap-2 items-end pointer-events-none" style={{ zIndex: 9999999 }}>
+        {toasts.map(t => (
+          <div key={t.id} className="pointer-events-auto ai-toast-anim">
+            <Notification id={t.id} variant={t.variant} message={t.message} autoHide duration={t.duration} onClose={() => removeToast(t.id)} />
+          </div>
+        ))}
+      </div>
       {/* Header / instructions */}
       <div className="absolute top-20 text-center max-w-3xl">
         <h2 className="text-2xl md:text-3xl font-bold text-black uppercase">CHỌN ĐỊA ĐIỂM BẠN YÊU THÍCH NHẤT</h2>
@@ -142,9 +248,7 @@ const Folder: React.FC<FolderProps> = ({ color = '#161853', size = 1.5, items = 
         <div className={folderClassName} style={folderStyle} onClick={handleClick}>
           <div className="folder__back">
             {renderOrder.map(i => {
-              const item = papers[i];
-              // if center (i===1) and no resultPaper, skip rendering it
-              if (i === 1 && !resultPaper) return null;
+              // intentionally do not render `item` content here — we only want the numeric badge
               return (
                 <div
                   key={i}
@@ -167,12 +271,9 @@ const Folder: React.FC<FolderProps> = ({ color = '#161853', size = 1.5, items = 
                       : {}
                   }
                 >
-                  {/* numeric badge above the paper: left=1, middle=3 (when present), right=2 */}
-                  {(i === 0 || i === 2 || (i === 1 && resultPaper)) && (
-                    <div className="paper-badge">{i === 0 ? '1' : i === 1 ? '3' : '2'}</div>
-                  )}
-                  {/* render either provided item or the generated resultPaper in the center */}
-                  {i === 1 && resultPaper ? resultPaper : item}
+                  {/* numeric badge above the paper: left=1, middle=3, right=2 */}
+                  <div className="paper-badge">{i === 0 ? '1' : i === 1 ? '3' : '2'}</div>
+                  {/* intentionally no content (we only show the badge numbers) */}
                 </div>
               );
             })}
