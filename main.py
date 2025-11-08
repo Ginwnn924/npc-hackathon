@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 
 
 # Configure Gemini AI
-genai.configure(api_key="AIzaSyAbZpClyGJ7Qecl52BmyflzsoTc_U-6Sew")
+genai.configure(api_key="AIzaSyBtQk3Y4cpzXUg-NQQZbjvuWdCpGZMjt4s")
 
 
 
@@ -135,31 +135,6 @@ async def get_ai_recommendation(user_query: str, places_data: list) -> dict:
         }
 
 
-@app.get("/demo")
-async def demo(question: str):
-    try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
-        res = model.generate_content(f"""
-                                        Bạn là một công cụ tìm kiếm địa chỉ trên Google Maps.
-
-                                        Địa chỉ cần tìm: {question}
-
-                                        Yêu cầu:
-                                        1. Tìm địa chỉ này trên Google Maps
-                                        2. Chỉ trả về ĐÚNG 1 link Google Maps duy nhất
-                                        3. Không giải thích, không nói thêm gì
-                                        4. Format: https://www.google.com/maps/search/?api=1&query=...
-
-                                        CHỈ TRẢ VỀ LINK, KHÔNG CÓ TEXT NÀO KHÁC!
-                                        """)
-
-        
-        return {
-            "answer": res.text
-        }
-        
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 # Endpoints
 @app.post("/search")
@@ -224,14 +199,18 @@ async def search_places(request: SearchRequest):
         # Chỉ giữ lại các field cần thiết
         fields_to_keep = ["ref_id", "distance", "address", "name", "display"]
         
-        filtered_results = [
-            {key: item.get(key) for key in fields_to_keep}
-            for item in unique_results.values()
-        ]
-        filtered_results.sort(key=lambda x: x.get("distance", 0))
+        filtered_results = []
 
-        return filtered_results[:10]
-        
+        for item in unique_results.values():
+            new_dict = {}
+            for key in fields_to_keep:
+                new_dict[key] = item.get(key)
+            new_dict['url'] = f"https://www.google.com/maps/search/?api=1&query={item.get('display', '').replace(' ', '+')}"
+            filtered_results.append(new_dict)
+        # filtered_results.sort(key=lambda x: x.get("distance", 0))
+
+        # return filtered_results[:10]
+        return filtered_results
     except httpx.HTTPError as e:
         raise HTTPException(status_code=500, detail=f"Lỗi khi gọi Vietmap API: {str(e)}")
     except Exception as e:
