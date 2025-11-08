@@ -22,8 +22,6 @@ export type CardNavItem = {
 };
 
 export interface CardNavProps {
-    logo: string;
-    logoAlt?: string;
     items?: CardNavItem[];
     className?: string;
     ease?: string;
@@ -64,8 +62,6 @@ const defaultNavItems: CardNavItem[] = [
 ];
 
 const CardNav: React.FC<CardNavProps> = ({
-    logo,
-    logoAlt = 'Logo',
     items,
     className = '',
     ease = 'power3.out',
@@ -74,6 +70,9 @@ const CardNav: React.FC<CardNavProps> = ({
     buttonBgColor = '#161853',
     buttonTextColor
 }) => {
+    // Hardcode the logo inside the component to avoid passing it from layout
+    const logo = '/logo.png';
+    const logoAlt = 'Logo';
     const [isHamburgerOpen, setIsHamburgerOpen] = useState(false);
     const [isExpanded, setIsExpanded] = useState(false);
     const navRef = useRef<HTMLDivElement | null>(null);

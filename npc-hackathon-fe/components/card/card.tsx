@@ -3,6 +3,10 @@ import React from 'react';
 interface CardProps {
     title?: string;
     description?: string;
+    /** distance text shown under the title, e.g. '1.2 km' */
+    distance?: string;
+    /** alternative explicit address prop; falls back to `description` when not provided */
+    address?: string;
     href?: string;
     /** optional anchor target, e.g. _blank */
     target?: string;
@@ -11,27 +15,42 @@ interface CardProps {
     className?: string;
     /** optional control to render inside the card (e.g. checkbox) */
     control?: React.ReactNode;
+    /** whether the card is selected (applies blue border and light-blue background) */
+    selected?: boolean;
 }
 
 const Card: React.FC<CardProps> = ({
     title = 'Need a help in Claim?',
     description = 'Go to this step by step guideline process on how to certify for your weekly benefits:',
+    distance,
+    address,
     href = '#',
     target,
     rel,
     className = '',
-    control
+    control,
+    selected = false
 }) => {
+    const baseClasses = `relative flex flex-col h-full p-6 rounded-lg shadow-sm text-[#333333] ${className}`;
+    const normalVisual = 'bg-white border border-gray-200';
+    const selectedVisual = 'bg-blue-50 border border-blue-500';
+
     return (
-        <div className={`relative flex flex-col h-full p-6 bg-white border border-gray-200 rounded-lg shadow-sm text-[#333333] ${className}`}>
+        <div className={`${baseClasses} ${selected ? selectedVisual : normalVisual}`}>
             {/* control placed inside card (top-right) */}
             {control && <div className="absolute top-4 right-4">{control}</div>}
 
             {/* Title is plain text so clicking the card (including title) triggers parent selection.
                 Only the detail link below is an actual anchor that navigates. */}
-            <h5 className="mb-2 text-2xl font-semibold tracking-tight">{title}</h5>
+            <h5 className="mb-1 text-xl md:text-2xl font-semibold tracking-tight">{title}</h5>
 
-            <p className="mb-3 font-normal">{description}</p>
+            {/* Distance appears directly under the title (smaller, medium weight) */}
+            {distance && (
+                <div className="text-sm md:text-base font-medium text-gray-700 mb-1">{distance}</div>
+            )}
+
+            {/* Address/description appears after distance (muted, smaller) */}
+            <p className="mb-3 text-sm md:text-base text-gray-500">{address ?? description}</p>
             {href && href !== '#' ? (
                 <a href={href} target={target} rel={rel} className="mt-auto inline-flex font-medium items-center text-blue-600 hover:underline">
                     Xem chi tiết địa điểm này

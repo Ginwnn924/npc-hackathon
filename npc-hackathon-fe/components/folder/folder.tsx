@@ -127,8 +127,8 @@ const Folder: React.FC<FolderProps> = ({ color = '#161853', size = 1.5, items = 
 
   const folderClassName = `folder ${open ? 'open' : ''}`.trim();
   const scaleStyle = { transform: `scale(${size})` };
-  // always render center paper (index 1) so it can serve as "paper 3" and open Schedule
-  const renderOrder = [0, 2, 1];
+  // render center paper (index 1) only when `resultPaper` is present (paper 2 succeeded)
+  const renderOrder = resultPaper ? [0, 2, 1] : [0, 2];
 
   return (
     <div className="h-screen flex flex-col justify-center items-center gap-8 px-6 relative">
@@ -143,8 +143,8 @@ const Folder: React.FC<FolderProps> = ({ color = '#161853', size = 1.5, items = 
           <div className="folder__back">
             {renderOrder.map(i => {
               const item = papers[i];
-              // render center even when resultPaper is empty so paper 3 is clickable
-              // (show placeholder when no resultPaper)
+              // if center (i===1) and no resultPaper, skip rendering it
+              if (i === 1 && !resultPaper) return null;
               return (
                 <div
                   key={i}
@@ -155,7 +155,7 @@ const Folder: React.FC<FolderProps> = ({ color = '#161853', size = 1.5, items = 
                     e.stopPropagation();
                     // open modal: paper 0 -> ai-section-1, paper 1 -> Schedule, paper 2 -> ai-section-2
                     if (i === 0) setModalPaper(0);
-                    if (i === 1) setModalPaper(1);
+                    if (i === 1 && resultPaper) setModalPaper(1);
                     if (i === 2) setModalPaper(2);
                   }}
                   style={
@@ -168,11 +168,11 @@ const Folder: React.FC<FolderProps> = ({ color = '#161853', size = 1.5, items = 
                   }
                 >
                   {/* numeric badge above the paper: left=1, middle=3 (when present), right=2 */}
-                  {(i === 0 || i === 2 || i === 1) && (
+                  {(i === 0 || i === 2 || (i === 1 && resultPaper)) && (
                     <div className="paper-badge">{i === 0 ? '1' : i === 1 ? '3' : '2'}</div>
                   )}
                   {/* render either provided item or the generated resultPaper in the center */}
-                  {i === 1 ? (resultPaper ?? <div className="paper-center-placeholder" />) : item}
+                  {i === 1 && resultPaper ? resultPaper : item}
                 </div>
               );
             })}

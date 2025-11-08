@@ -74,6 +74,13 @@ export default function AISection() {
         };
     };
 
+    // helper to extract numeric distance (used for sorting). Missing/invalid -> Infinity
+    const getDistance = (r: any) => {
+        const raw = r?.distance ?? r?.dist ?? null;
+        const n = typeof raw === 'string' ? Number(raw) : raw;
+        return typeof n === 'number' && !isNaN(n) ? n : Infinity;
+    };
+
     // --- PERSIST FUNCTION (sửa và tối ưu) ---
     const persistSection1 = (overrides?: {
         location?: string;
@@ -139,7 +146,9 @@ export default function AISection() {
 
             if (Array.isArray(parsed.lastResults)) {
                 const clean = parsed.lastResults.filter((r: { name: any; }) => r && r.name);
-                setSearchResults(clean);
+                // sort overall by distance ascending so smallest distance appears first
+                const sorted = clean.slice().sort((a: any, b: any) => getDistance(a) - getDistance(b));
+                setSearchResults(sorted);
             }
 
             setSuppressSuggestions(true);
@@ -249,7 +258,11 @@ export default function AISection() {
             });
             if (!res.ok) throw new Error(`search failed ${res.status}`);
             const data = await res.json();
-            const results = Array.isArray(data) ? data : [];
+            let results = Array.isArray(data) ? data : [];
+
+            // sort by numeric distance ascending (small first). If distance missing/invalid, treat as Infinity so it appears last.
+            results = results.slice().sort((a: any, b: any) => getDistance(a) - getDistance(b));
+
             setSearchResults(results);
             persistSection1({ lastResults: results });
         } catch (err) {
@@ -357,7 +370,7 @@ export default function AISection() {
     return (
         <section className="h-screen max-w-7xl mx-auto px-6 py-12">
             <div className="bg-white/5 border border-white/6 rounded-xl p-6 flex flex-col h-full">
-                <h3 className="text-xl font-semibold text-black mb-4">Trợ lý AI — Lên kế hoạch chuyến đi</h3>
+                <h3 className="text-xl font-semibold text-black mb-4">Gợi ý địa điểm</h3>
 
                 <div className="flex-1">
                     {/* Location input */}
@@ -472,7 +485,7 @@ export default function AISection() {
                             <div className="text-sm text-gray-500">Chưa có dữ liệu. Vui lòng chọn vị trí và bấm Tìm kiếm.</div>
                         ) : (
                             <>
-                                <h4 className="text-lg font-medium text-black mb-3">Kết quả tìm kiếm</h4>
+                                <h4 className="text-lg font-medium text-black mb-3">Kết quả tìm kiếm (click vào card để chọn)</h4>
                                 {searchResults.length === 0 ? (
                                     <div className="text-sm text-gray-500">Không tìm thấy kết quả.</div>
                                 ) : (
@@ -480,6 +493,18 @@ export default function AISection() {
                                         {searchResults.map((item, idx) => {
                                             const id = item.ref_id ?? item.refId ?? item.id ?? idx;
                                             const isSelected = !!selectedResults[String(id)];
+
+                                            // normalize address & distance for display
+                                            const addr = item.address ?? item.addr ?? item.vicinity ?? '';
+                                            const rawDist = item.distance ?? item.dist ?? null;
+                                            let distText: string | undefined = undefined;
+                                            if (typeof rawDist === 'number') {
+                                                // assume numeric distances are in km
+                                                distText = `${rawDist.toFixed(2)} km`;
+                                            } else if (rawDist != null) {
+                                                distText = String(rawDist);
+                                            }
+
                                             return (
                                                 <div key={id} className="h-full">
                                                     <div
@@ -497,12 +522,14 @@ export default function AISection() {
                                                                 toggleResultSelected(item);
                                                             }
                                                         }}
-                                                        className={`w-full h-full rounded-lg ${isSelected ? 'border-2 border-[#161853] bg-blue-50' : 'border border-transparent'}`}
+                                                        className="w-full h-full rounded-lg"
                                                     >
                                                         <Card
-                                                            className={`w-full max-w-none ${isSelected ? 'border-transparent' : ''}`}
+                                                            className="w-full max-w-none"
+                                                            selected={isSelected}
                                                             title={item.name || item.display}
-                                                            description={`${item.address} — ${typeof item.distance === 'number' ? item.distance.toFixed(2) : item.distance} km`}
+                                                            distance={distText}
+                                                            address={addr}
                                                             href={item.url || undefined}
                                                             target={item.url ? '_blank' : undefined}
                                                             rel={item.url ? 'noopener noreferrer' : undefined}
