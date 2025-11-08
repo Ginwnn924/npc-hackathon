@@ -1,7 +1,8 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional
-import google.generativeai as genai
+# import google.generativeai as genai
 import httpx
 import os
 from dotenv import load_dotenv
@@ -9,11 +10,26 @@ from dotenv import load_dotenv
 
 
 # Configure Gemini AI
-genai.configure(api_key="AIzaSyBtQk3Y4cpzXUg-NQQZbjvuWdCpGZMjt4s")
+# genai.configure(api_key="AIzaSyBtQk3Y4cpzXUg-NQQZbjvuWdCpGZMjt4s")
 
 
 
 app = FastAPI(title="Vietmap Places Search API with AI")
+
+# CORS configuration: cho phép frontend Next.js chạy ở localhost:3000 gọi API
+origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    # Thêm domain production ở đây nếu cần, ví dụ: "https://yourdomain.com"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Mapping categories -> keywords (đổi tên từ data -> CATEGORY_MAPPING)
 CATEGORY_MAPPING = {

@@ -1,0 +1,23 @@
+.curved-loop-jacket {
+  /* keep the loop compact when used as a decorative element */
+  height: 160px; /* slightly taller to accomodate bigger text */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+}
+
+.curved-loop-svg {
+  user-select: none;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  display: block;
+  font-size: 3rem; /* larger marquee text */
+  fill: currentColor; /* inherit color from parent (className) */
+  -moz-user-select: none;
+  -webkit-user-select: none;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1;
+}
