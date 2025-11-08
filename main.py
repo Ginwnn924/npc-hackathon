@@ -13,7 +13,7 @@ import requests
 
 
 # Configure Gemini AI
-genai.configure(api_key="AIzaSyBtQk3Y4cpzXUg-NQQZbjvuWdCpGZMjt4s")
+genai.configure(api_key="AIzaSyAGZ5JJLeeECKnPBeVmmXluZHLc5dT7PyU")
 model = genai.GenerativeModel('gemini-2.5-flash')
 
 # Helper function để dùng Gemini tìm giờ mở cửa
@@ -305,30 +305,160 @@ class PlaceForSchedule(BaseModel):
     name: str
     address: str
     distance: float
-    url: Optional[str] = None
 
 class ScheduleRequest(BaseModel):
     places: List[PlaceForSchedule]
     start_time: Optional[str] = "09:00"  # Thời gian bắt đầu mặc định
     visit_date: Optional[str] = None  # Ngày tham quan (format: YYYY-MM-DD)
+    prompt: Optional[str] = None  # Yêu cầu đặc biệt của người dùng về thứ tự/sắp xếp
+
+
+async def optimize_places_order_with_ai(places: List[PlaceForSchedule], user_prompt: str = None) -> List[PlaceForSchedule]:
+    """
+    Sử dụng AI để sắp xếp lại thứ tự các địa điểm theo:
+    1. Yêu cầu của người dùng (nếu có prompt)
+    2. Tối ưu đường đi (khoảng cách)
+    3. Logic hợp lý (giờ mở cửa, loại địa điểm)
+    """
+    try:
+        places_info = []
+        for idx, place in enumerate(places):
+            places_info.append({
+                "index": idx,
+                "ref_id": place.ref_id,
+                "name": place.name,
+                "address": place.address,
+                "distance": place.distance
+            })
+        
+        places_json = json.dumps(places_info, ensure_ascii=False, indent=2)
+        
+        prompt_text = f"""Bạn là chuyên gia lập kế hoạch du lịch. Hãy sắp xếp lại thứ tự các địa điểm sau để:
+1. ĐÁP ỨNG yêu cầu của người dùng: "{user_prompt if user_prompt else 'Không có yêu cầu đặc biệt'}"
+2. TỐI ƯU đường đi (giảm thời gian di chuyển)
+3. HỢP LÝ về mặt logic (ví dụ: không đi công viên vào trưa nắng, nhà hàng vào giờ ăn)
+
+DANH SÁCH ĐỊA ĐIỂM:
+{places_json}
+
+YÊU CẦU:
+- LUÔN ưu tiên yêu cầu của người dùng TRƯỚC
+- Sau đó tối ưu khoảng cách giữa các địa điểm còn lại
+- Giải thích ngắn gọn lý do sắp xếp
+
+TRẢ VỀ JSON (KHÔNG markdown):
+{{
+    "optimized_order": [0, 1, 2, ...],  // Mảng index theo thứ tự mới (bắt đầu từ 0)
+    "reasoning": "Giải thích ngắn gọn về cách sắp xếp",
+    "distance_optimized": true,
+    "user_preference_applied": true
+}}
+
+CHỈ JSON, KHÔNG TEXT KHÁC."""
+
+        response = model.generate_content(prompt_text)
+        ai_text = response.text.strip()
+        
+        # Clean markdown
+        if ai_text.startswith("```json"):
+            ai_text = ai_text[7:]
+        if ai_text.startswith("```"):
+            ai_text = ai_text[3:]
+        if ai_text.endswith("```"):
+            ai_text = ai_text[:-3]
+        ai_text = ai_text.strip()
+        
+        result = json.loads(ai_text)
+        optimized_order = result.get("optimized_order", list(range(len(places))))
+        
+        # Sắp xếp lại places theo order mới
+        reordered_places = [places[i] for i in optimized_order]
+        
+        return reordered_places, result
+        
+    except Exception as e:
+        print(f"Error optimizing places order: {str(e)}")
+        # Nếu lỗi, giữ nguyên thứ tự ban đầu
+        return places, {"error": str(e), "reasoning": "Giữ nguyên thứ tự ban đầu do lỗi"}
+
+
+def calculate_travel_time(distance_km: float) -> int:
+    """
+    Tính thời gian di chuyển dựa trên khoảng cách
+    Giả định: tốc độ trung bình 20-30 km/h trong thành phố
+    """
+    if distance_km < 1:
+        return 10  # 10 phút cho khoảng cách ngắn
+    elif distance_km < 3:
+        return 15  # 15 phút
+    elif distance_km < 5:
+        return 20  # 20 phút
+    elif distance_km < 10:
+        return int(distance_km * 5)  # ~30 phút cho 5-10km
+    else:
+        return int(distance_km * 6)  # ~60 phút cho 10km+
+
+
+def estimate_visit_duration(place_name: str, categories: str = "") -> int:
+    """
+    Ước tính thời gian tham quan dựa trên loại địa điểm
+    """
+    name_lower = place_name.lower()
+    
+    # Bảo tàng, di tích
+    if any(keyword in name_lower for keyword in ["bảo tàng", "di tích", "museum", "monument"]):
+        return 90
+    
+    # Công viên, vườn
+    if any(keyword in name_lower for keyword in ["công viên", "vườn", "park", "garden"]):
+        return 60
+    
+    # Nhà hàng, quán ăn
+    if any(keyword in name_lower for keyword in ["nhà hàng", "quán", "restaurant", "cafe", "coffee"]):
+        return 45
+    
+    # Chùa, đền, nhà thờ
+    if any(keyword in name_lower for keyword in ["chùa", "đền", "nhà thờ", "temple", "church", "pagoda"]):
+        return 45
+    
+    # Khu mua sắm
+    if any(keyword in name_lower for keyword in ["trung tâm", "siêu thị", "mall", "market", "chợ"]):
+        return 60
+    
+    # Mặc định
+    return 60
 
 
 @app.post("/schedule")
 async def create_schedule(request: ScheduleRequest):
     """
     Stream kết quả lập lịch - gửi từng địa điểm ngay khi AI xử lý xong
+    Hỗ trợ tối ưu thứ tự địa điểm theo yêu cầu người dùng
     """
     async def event_stream():
         try:
+            # B0: Tối ưu thứ tự địa điểm nếu có prompt
+            optimized_places = request.places
+            optimization_info = None
+            
+            if request.prompt:
+                yield f"data: {json.dumps({'status': 'optimizing', 'message': f'Đang tối ưu thứ tự địa điểm theo yêu cầu: {request.prompt}'}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.3)
+                
+                optimized_places, optimization_info = await optimize_places_order_with_ai(request.places, request.prompt)
+                
+                yield f"data: {json.dumps({'status': 'optimized', 'message': 'Đã tối ưu thứ tự địa điểm', 'optimization': optimization_info}, ensure_ascii=False)}\n\n"
+                await asyncio.sleep(0.3)
+            
             # B1: Bắt đầu
             yield f"data: {json.dumps({'status': 'processing', 'message': 'Bắt đầu lập lịch tham quan...'}, ensure_ascii=False)}\n\n"
             await asyncio.sleep(0.3)
             
             # B2: Lấy giờ mở cửa cho từng địa điểm
             places_with_hours = []
-            for idx, place in enumerate(request.places, start=1):
-                msg = f"🔍 Đang lấy giờ mở cửa cho {place.name} ({idx}/{len(request.places)})..."
-                yield f"data: {json.dumps({'status': 'fetching_hours', 'place': place.name, 'message': msg, 'progress': idx, 'total': len(request.places)}, ensure_ascii=False)}\n\n"
+            for idx, place in enumerate(optimized_places, start=1):
+                msg = f"🔍 Đang lấy giờ mở cửa cho {place.name} ({idx}/{len(optimized_places)})..."
+                yield f"data: {json.dumps({'status': 'fetching_hours', 'place': place.name, 'message': msg, 'progress': idx, 'total': len(optimized_places)}, ensure_ascii=False)}\n\n"
                 
                 # Giả lập lấy giờ mở cửa (thay bằng API thật)
                 hours_info = {
@@ -361,7 +491,6 @@ async def create_schedule(request: ScheduleRequest):
                     "name": place.name,
                     "address": place.address,
                     "distance": place.distance,
-                    "url": place.url,
                     "found": True,
                     "opening_hours": hours_info.get('opening_hours', {}),
                     "is_open_now": hours_info.get('is_open_now', None),
@@ -386,8 +515,14 @@ async def create_schedule(request: ScheduleRequest):
                 msg = f"🤖 AI đang lập lịch cho {place['name']} ({idx}/{len(places_with_hours)})"
                 yield f"data: {json.dumps({'status': 'ai_processing_place', 'place': place['name'], 'message': msg, 'progress': idx, 'total': len(places_with_hours)}, ensure_ascii=False)}\n\n"
                 
-                # Tạo prompt cho TỪNG địa điểm
-                prompt = create_single_place_schedule_prompt(request, place, idx, len(places_with_hours), schedule_items)
+                # Tính khoảng cách đến địa điểm tiếp theo
+                distance_to_next = 0
+                if idx < len(places_with_hours):
+                    # Ước tính khoảng cách giữa 2 địa điểm (có thể cải thiện bằng API)
+                    distance_to_next = abs(places_with_hours[idx]['distance'] - place['distance'])
+                
+                # Tạo prompt cho TỪNG địa điểm với tính toán thời gian chính xác
+                prompt = create_optimized_schedule_prompt(request, place, idx, len(places_with_hours), schedule_items, distance_to_next)
                 
                 try:
                     response = model.generate_content(prompt)
@@ -452,8 +587,10 @@ async def create_schedule(request: ScheduleRequest):
             # B6: Gửi kết quả cuối cùng
             final_result = {
                 "success": True,
-                "visit_date": request.visit_date if hasattr(request, 'visit_date') else datetime.now().strftime("%Y-%m-%d"),
+                "visit_date": request.visit_date if request.visit_date else datetime.now().strftime("%Y-%m-%d"),
                 "start_time": request.start_time,
+                "user_prompt": request.prompt,
+                "optimization_applied": optimization_info,
                 "places_count": len(request.places),
                 "places_with_hours_found": len([p for p in places_with_hours if p.get('found')]),
                 "schedule": {
@@ -479,6 +616,90 @@ async def create_schedule(request: ScheduleRequest):
             "X-Accel-Buffering": "no"
         }
     )
+
+def create_optimized_schedule_prompt(request: ScheduleRequest, place: dict, idx: int, total: int, previous_schedule: list, distance_to_next: float) -> str:
+    """Tạo prompt cho TỪNG địa điểm với tính toán thời gian chính xác"""
+    
+    # Tính thời gian bắt đầu dựa trên địa điểm trước
+    if previous_schedule:
+        last_item = previous_schedule[-1]
+        start_time = last_item.get('end_time', request.start_time)
+        travel_time = last_item.get('travel_time_to_next', 0)
+        # Tính thời gian bắt đầu = end_time của địa điểm trước + travel_time
+        from datetime import datetime, timedelta
+        try:
+            last_end = datetime.strptime(start_time, "%H:%M")
+            new_start = last_end + timedelta(minutes=travel_time)
+            suggested_start = new_start.strftime("%H:%M")
+        except:
+            suggested_start = request.start_time
+    else:
+        suggested_start = request.start_time
+    
+    # Thông tin địa điểm trước (để tính khoảng cách)
+    previous_place_info = ""
+    if previous_schedule:
+        last_place = previous_schedule[-1]
+        previous_place_info = f"\n- Địa điểm trước: {last_place.get('place_name', 'N/A')}"
+    
+    # Tính thời gian di chuyển đến địa điểm tiếp theo
+    travel_time_next = calculate_travel_time(distance_to_next) if idx < total else 0
+    
+    # Ước tính thời gian tham quan
+    estimated_duration = estimate_visit_duration(place['name'])
+    
+    hours_info = ""
+    if place.get('weekday_text'):
+        hours_info = "\n".join(place['weekday_text'])
+    else:
+        hours_info = "Không có thông tin chính xác"
+    
+    return f"""Bạn là chuyên gia lập lịch trình du lịch. Hãy tạo lịch chi tiết cho địa điểm thứ {idx}/{total}.
+
+ĐỊA ĐIỂM HIỆN TẠI:
+- Tên: {place['name']}
+- Địa chỉ: {place['address']}
+- Khoảng cách từ điểm xuất phát: {place['distance']:.2f}km
+- Giờ mở cửa:
+{hours_info}
+- Ghi chú: {place.get('notes', 'Không có')}{previous_place_info}
+
+THÔNG TIN CHUYẾN ĐI:
+- Ngày: {request.visit_date if request.visit_date else 'hôm nay'}
+- Thời gian đề xuất bắt đầu địa điểm này: {suggested_start}
+- Vị trí: Địa điểm {idx}/{total}
+- Thời gian tham quan đề xuất: {estimated_duration} phút
+- Thời gian di chuyển đến địa điểm tiếp theo: {travel_time_next} phút
+
+YÊU CẦU QUAN TRỌNG:
+1. ĐẢM BẢO thời gian không trùng lặp với các địa điểm khác
+2. Thời gian bắt đầu PHẢI sau thời gian kết thúc của địa điểm trước
+3. Kiểm tra giờ mở cửa để đảm bảo địa điểm có mở
+4. Tính toán thời gian di chuyển CHÍNH XÁC
+5. Đề xuất thời gian tham quan HỢP LÝ dựa trên loại địa điểm
+
+TRẢ VỀ JSON (KHÔNG có markdown, CHỈ JSON):
+{{
+    "order": {idx},
+    "ref_id": "{place['ref_id']}",
+    "place_name": "{place['name']}",
+    "address": "{place['address']}",
+    "start_time": "{suggested_start}",
+    "end_time": "HH:MM",
+    "duration_minutes": {estimated_duration},
+    "travel_time_to_next": {travel_time_next},
+    "distance_to_next_km": {distance_to_next:.2f},
+    "notes": "Lưu ý về giờ mở cửa, điều cần chú ý",
+    "recommended_activities": ["Hoạt động 1", "Hoạt động 2", "Hoạt động 3"],
+    "is_within_opening_hours": true
+}}
+
+QUAN TRỌNG: 
+- start_time = {suggested_start}
+- end_time = start_time + duration_minutes
+- ĐẢM BẢO end_time không trùng với start_time của địa điểm tiếp theo
+
+CHỈ TRẢ VỀ JSON, KHÔNG TEXT KHÁC."""
 
 def create_single_place_schedule_prompt(request: ScheduleRequest, place: dict, idx: int, total: int, previous_schedule: list) -> str:
     """Tạo prompt cho TỪNG địa điểm"""
@@ -577,106 +798,8 @@ TRẢ VỀ JSON (KHÔNG markdown):
 
 CHỈ JSON, KHÔNG TEXT KHÁC."""
 
-# Input model
-class ReorderRequest(BaseModel):
-    schedule: dict
-    prompt: str
 
-async def get_distance_matrix(locations: List[Dict[str, float]]) -> List[List[float]]:
-    """
-    Gọi VietMap Distance Matrix API để lấy thời gian di chuyển giữa các điểm (phút)
-    """
-    url = "https://maps.vietmap.vn/api/matrix/v1/driving"
-    headers = {"Content-Type": "application/json"}
-    body = {
-        "points": [{"lng": loc["lng"], "lat": loc["lat"]} for loc in locations],
-        "apikey": "4760087f980b480d9efaf4fb02c649ac9f69fc462c01d149"
-    }
 
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(url, headers=headers, json=body, timeout=30)
-        resp.raise_for_status()
-        data = resp.json()
-        durations = data.get("durations", [])
-        # Chuyển sang phút
-        durations_minutes = [[round(x / 60, 1) for x in row] for row in durations]
-        return durations_minutes
-
-@app.post("/reorder_schedule")
-async def reorder_schedule(req: ReorderRequest):
-    """
-    Reorder lại lịch trình theo prompt người dùng
-    và tự động tối ưu tuyến đường (route optimization).
-    """
-    try:
-        schedule_data = req.schedule
-        schedule_list = schedule_data.get("schedule", {}).get("schedule", [])
-        if not schedule_list:
-            raise HTTPException(status_code=400, detail="Không có địa điểm nào trong lịch trình.")
-
-        # Giả định bạn có lưu lat/lng trong raw_places_info
-        raw_places = schedule_data.get("raw_places_info", [])
-        locations = [{"lat": p.get("lat", 0), "lng": p.get("lng", 0)} for p in raw_places if p.get("lat") and p.get("lng")]
-
-        # Nếu có tọa độ thì tính distance matrix
-        distance_matrix = []
-        if len(locations) >= 2:
-            distance_matrix = await get_distance_matrix(locations)
-
-        # Tạo prompt cho Gemini
-        prompt_text = f"""
-Bạn là một trợ lý AI chuyên lập lịch du lịch thông minh.
-
-Dưới đây là lịch trình hiện tại của người dùng (dưới dạng JSON):
-{json.dumps(schedule_data, ensure_ascii=False, indent=2)}
-
-Nếu có ma trận thời gian di chuyển (đơn vị phút), hãy sử dụng để tối ưu:
-{json.dumps(distance_matrix, ensure_ascii=False)}
-
-Yêu cầu người dùng:
-{req.prompt}
-
-Nhiệm vụ của bạn:
-1. Sắp xếp lại thứ tự các địa điểm trong "schedule.schedule" sao cho tuyến đường ngắn nhất và hợp lý nhất.
-2. Đảm bảo phù hợp với ý muốn của người dùng.
-3. Cập nhật lại "order", "start_time", "end_time", "travel_time_to_next".
-4. Giữ nguyên các thông tin khác (notes, recommended_activities, ...).
-5. Trả về toàn bộ JSON đầy đủ, không cắt bớt, không thêm text ngoài JSON.
-"""
-
-        # Gọi Gemini
-        response = model.generate_content(prompt_text)
-        ai_text = response.text.strip()
-
-        # Xử lý nếu có markdown code block
-        if ai_text.startswith("```json"):
-            ai_text = ai_text[7:]
-        if ai_text.startswith("```"):
-            ai_text = ai_text[3:]
-        if ai_text.endswith("```"):
-            ai_text = ai_text[:-3]
-        ai_text = ai_text.strip()
-
-        # Parse JSON kết quả
-        try:
-            reordered = json.loads(ai_text)
-        except json.JSONDecodeError as e:
-            print("Gemini output parse error:", str(e))
-            print("Raw output:\n", ai_text)
-            raise HTTPException(status_code=500, detail="Gemini trả về định dạng không hợp lệ")
-
-        # Trả về kết quả cuối cùng
-        return {
-            "success": True,
-            "optimized": True,
-            "user_prompt": req.prompt,
-            "data": reordered
-        }
-
-    except httpx.HTTPError as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi khi gọi API Vietmap: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 
